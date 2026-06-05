@@ -1,0 +1,534 @@
+// kanri-tool 業務 DB スキーマ。
+//
+// - Prisma v7 では `datasource` ブロックに URL を書かない。
+//   接続文字列は `prisma.config.ts` の `datasource.url`（CLI = DIRECT_URL）と、
+//   ランタイムでは `src/shared/db/prisma.ts` の PrismaPg adapter（= DATABASE_URL）が担う。
+// - スキーマはタスク 2.x で段階導入する。本ファイルはタスク 2.6 完了時点で
+//   Foundation フェーズ 2（DB スキーマ）の全テーブル・view 用インデックスを含む。
+//   `v_insurance_alerts` view 本体は Prisma が生成できないため、
+//   マイグレーション SQL で定義する（tasks 2.6）。
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// 接続確認 / マイグレーション疎通用の最小テーブル。
+/// 業務データではなく、`prisma migrate dev` が成功することと
+/// アプリから DB へ実クエリが届くことを観測するためだけに存在する。
+model SystemMeta {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_meta")
+}
+
+// =============================================================================
+// タスク 2.1: コアエンティティ（施設・職員・所属関係・ロックアウト）
+//
+// 設計判断:
+// - 命名は snake_case 複数形（database.md）、PK は UUID、タイムスタンプは timestamptz。
+// - `created_by` / `updated_by` は staff_accounts.id への論理 FK のため、DB レベルの
+//   関係制約は張らずに UUID 列のみで保持する。最初の管理者作成時に自己参照になるため
+//   nullable とし、サービス層で値を埋める。
+// - 認証は Supabase Auth に委譲し、staff_accounts.auth_user_id を 1:1 で結ぶ。
+//   業務側 ID（staff_accounts.id）は Supabase 識別子と分離し、Supabase Auth ユーザー
+//   を将来差し替える際の安全弁とする（database.md / authentication.md）。
+// - 施設マスタは「削除」よりも `is_active=false` の運用が基本だが、StaffAccountFacility
+//   は管理画面から付け外しされるため、削除時の挙動を明示する。
+//     - staff → join: ON DELETE CASCADE（職員削除に伴う所属の自動掃除）
+//     - facility → join: ON DELETE RESTRICT（誤削除防止 / database.md の規約に従う）
+// =============================================================================
+
+/// 役割。authentication.md の RBAC マトリクスと整合する。
+/// - admin : 全機能（施設横断・職員管理・監査ログ）
+/// - staff : 利用者 CUD・保険 CUD（自施設のみ）
+/// - viewer: 自施設の閲覧のみ。CUD・PDF 出力・状態変更は全て拒否
+enum Role {
+  admin
+  staff
+  viewer
+}
+
+/// 施設マスタ。
+/// マルチテナント分離ではなく、本テーブルの id を全業務テーブルが `facility_id`
+/// として保持し、アプリ層の施設スコープで横断アクセスを抑止する（Req 15）。
+model Facility {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy String?  @map("created_by") @db.Uuid
+  updatedBy String?  @map("updated_by") @db.Uuid
+
+  staffAccountAssignments StaffAccountFacility[]
+  residents               Resident[]
+
+  @@map("facilities")
+}
+
+/// 職員アカウント。
+/// `auth_user_id` で Supabase Auth ユーザーと 1:1 を表現し、ログイン ID とメールは
+/// アプリ側の UNIQUE 制約で重複登録を拒否する（Req 3.2）。`role` は authentication.md の
+/// 3 役割に限定。`is_active=false` は全要求拒否の対象（Req 2.6）。
+model StaffAccount {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authUserId  String    @unique @map("auth_user_id") @db.Uuid
+  displayName String    @map("display_name")
+  loginId     String    @unique @map("login_id")
+  email       String    @unique
+  role        Role
+  isActive    Boolean   @default(true) @map("is_active")
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+
+  facilityAssignments StaffAccountFacility[]
+  auditLogs           AuditLog[]
+
+  @@map("staff_accounts")
+}
+
+/// 職員 × 施設の所属関係（N:N）。
+/// 複合主キーで同一ペアの重複付与を DB で防ぐ。Cascade / Restrict のポリシーは
+/// 本ファイル冒頭のコメント参照。
+model StaffAccountFacility {
+  staffAccountId String   @map("staff_account_id") @db.Uuid
+  facilityId     String   @map("facility_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  staffAccount StaffAccount @relation(fields: [staffAccountId], references: [id], onDelete: Cascade)
+  facility     Facility     @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+
+  @@id([staffAccountId, facilityId])
+  @@index([facilityId])
+  @@map("staff_account_facilities")
+}
+
+/// ロックアウト判定用の認証試行ログ。
+/// 直近 N 分の `login_id` 単位での失敗回数を数えるため、`(login_id, attempted_at desc)`
+/// インデックスを必須とする（Req 1.6, authentication.md「Lockout」）。
+/// 個人情報は含めない（IP は `inet`、パスワード等は記録しない / Req 16.3）。
+model LoginAttempt {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  loginId     String   @map("login_id")
+  succeeded   Boolean
+  ip          String?  @db.Inet
+  attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz()
+
+  @@index([loginId, attemptedAt(sort: Desc)])
+  @@map("login_attempts")
+}
+
+// =============================================================================
+// タスク 2.2: 利用者・医療ケア・緊急連絡先
+//
+// 設計判断:
+// - 利用者は施設に必ず属する（Req 15.1）。`facility_id` への FK は Restrict とし、
+//   施設の誤削除で利用者レコードが失われないようにする。
+// - 必須項目（name / name_kana / birth_date / gender / facility_id / usage_status）は
+//   NOT NULL（Req 5.6）。年齢は永続化せず、誕生日から派生（Req 5.2）。
+// - 退去日整合（Req 5.4 / 5.5）はサービス層 + DB の CHECK で二重ガード。
+//   CHECK は biconditional 「usage_status = 'discharged' ⇔ move_out_date IS NOT NULL」
+//   を表現する。本制約は Prisma スキーマで直接表現できないため、本ファイル直後の
+//   マイグレーション（residents_and_contacts）で ALTER TABLE で付与する。
+// - 医療／ケア情報は 1:1（resident_id 単独 PK）。1 利用者で複数行を物理的に作れない。
+// - 緊急連絡先は最大 2 件（Req 10.3）。(resident_id, sort_order) を UNIQUE し、
+//   sort_order ∈ {1, 2} を CHECK で固定する。
+// - 個別の物理インデックス（`(facility_id, name_kana)` / `(facility_id, usage_status)`）は
+//   タスク 2.6 で性能観点とまとめて付与する（design.md「インデックス（必須）」）。
+// =============================================================================
+
+/// 利用者の利用状況。authentication.md / database.md の ENUM 規約に従い、
+/// Prisma enum と PostgreSQL ENUM 双方で値域を強制する（Req 5.3）。
+/// - active     : 入居中
+/// - discharged : 退去済み（move_out_date 必須）
+/// - scheduled  : 入居予定
+/// - paused     : 一時停止
+enum UsageStatus {
+  active
+  discharged
+  scheduled
+  paused
+}
+
+/// 利用者プロファイル。
+/// 個人情報を多く含むため、すべての参照クエリは認可サービスの
+/// `getAccessibleFacilityIds(session)` でスコープを限定して呼ぶこと（Req 15.2）。
+model Resident {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  facilityId     String      @map("facility_id") @db.Uuid
+  name           String
+  nameKana       String      @map("name_kana")
+  birthDate      DateTime    @map("birth_date") @db.Date
+  gender         String
+  address        String?
+  phone          String?
+  mobile         String?
+  moveInDate     DateTime?   @map("move_in_date") @db.Date
+  moveOutDate    DateTime?   @map("move_out_date") @db.Date
+  usageStatus    UsageStatus @map("usage_status")
+  medicalHistory String?     @map("medical_history")
+  notes          String?
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy      String?     @map("created_by") @db.Uuid
+  updatedBy      String?     @map("updated_by") @db.Uuid
+
+  facility                      Facility                       @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+  medicalCareInfo               MedicalCareInfo?
+  emergencyContacts             EmergencyContact[]
+  careInsurance                 CareInsurance?
+  medicalInsurance              MedicalInsurance?
+  disabilityWelfareInfo         DisabilityWelfareInfo?
+  publicExpenseRecords          PublicExpenseRecord[]
+  comprehensiveInsuranceRecords ComprehensiveInsuranceRecord[]
+  externalVendorKeys            ExternalVendorKey[]
+
+  @@index([facilityId, nameKana])
+  @@index([facilityId, usageStatus])
+  @@map("residents")
+}
+
+/// 医療機関・ケアマネ情報。利用者と 1:1（resident_id 単独 PK で物理的に重複不可）。
+/// すべての列を nullable とし、業務側で「未入力＝null」を扱えるようにする
+/// （Req 10.1 / 10.2 / 10.5）。
+model MedicalCareInfo {
+  residentId          String   @id @map("resident_id") @db.Uuid
+  medicalFacilityName String?  @map("medical_facility_name")
+  primaryDoctor       String?  @map("primary_doctor")
+  emergencyHospital   String?  @map("emergency_hospital")
+  emergencyHospital2  String?  @map("emergency_hospital2")
+  careOffice          String?  @map("care_office")
+  careOfficePhone     String?  @map("care_office_phone")
+  careOfficeLicenseNo String?  @map("care_office_license_no")
+  careManagerName     String?  @map("care_manager_name")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy           String?  @map("created_by") @db.Uuid
+  updatedBy           String?  @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@map("medical_care_info")
+}
+
+/// 緊急連絡先（1 利用者最大 2 件）。
+/// `sort_order` は 1 or 2 のスロット番号で、(resident_id, sort_order) の UNIQUE と
+/// `sort_order IN (1, 2)` の CHECK で値域を固定する（Req 10.3）。
+/// 連絡先 1 の電話/携帯の両方未入力許容（警告のみ / Req 10.4）と、
+/// 連絡先 2 がある状態で連絡先 1 を空にする更新の禁止（Req 10.6）は
+/// サービス層で扱う（DB レベルでは表現困難）。
+model EmergencyContact {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  residentId   String   @map("resident_id") @db.Uuid
+  sortOrder    Int      @map("sort_order") @db.SmallInt
+  name         String
+  relationship String?
+  address      String?
+  phone        String?
+  mobile       String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy    String?  @map("created_by") @db.Uuid
+  updatedBy    String?  @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@unique([residentId, sortOrder])
+  @@map("emergency_contacts")
+}
+
+// =============================================================================
+// タスク 2.3: 保険情報（介護・医療・障害福祉・公費）
+//
+// 設計判断（design.md / Req 7）:
+// - 4 種は独立した子テーブルとし、利用者削除で Cascade させる（個人情報を残留させない）。
+// - 介護・医療・障害は 1 利用者あたり高々 1 件のため、`resident_id` を単独 PK にして
+//   物理的に重複保持を不可能にする（1:1 / 0..1）。
+// - 公費は 1:N。各レコードに id を持たせ、複数件の同時保持を表現する。
+// - 桁数・形式（Req 7.7）は zod とサービス層で最終検証し、DB は CHECK で二次防御する。
+//   フィールドが nullable のものは `x IS NULL OR x ~ '...'` の形で空値ドラフトも許容。
+// - 期間整合（Req 7.8）は `period_end >= period_start` の CHECK を care_insurance と
+//   disability_welfare_info に付与する（両端が揃った時にのみチェック）。
+// - 介護保険「負担割合」は 1割/2割/3割の三択。SmallInt(1|2|3) + CHECK で表現する。
+// - 要介護度は ENUM CareLevel（要支援 1〜2、要介護 1〜5、認定なしの 8 値）。
+//   medical_insurance.insurer_no は健康保険組合 6 桁／国民健保 8 桁などのバリエーションを
+//   許容するため `[0-9]{6,8}` とし、care_insurance.insurer_no（市町村コード固定 6 桁）と
+//   分けて CHECK する。
+// =============================================================================
+
+/// 要介護度。介護保険の認定区分。
+enum CareLevel {
+  support1
+  support2
+  care1
+  care2
+  care3
+  care4
+  care5
+  not_certified
+}
+
+/// 介護保険情報（1 利用者 1 件）。
+/// Req 7.2 の保有項目と Req 7.7 / 7.8 の制約を担う。
+model CareInsurance {
+  residentId           String     @id @map("resident_id") @db.Uuid
+  insurerNo            String?    @map("insurer_no")
+  insuredNo            String?    @map("insured_no")
+  careLevel            CareLevel? @map("care_level")
+  certificationDate    DateTime?  @map("certification_date") @db.Date
+  periodStart          DateTime?  @map("period_start") @db.Date
+  periodEnd            DateTime?  @map("period_end") @db.Date
+  burdenRatio          Int?       @map("burden_ratio") @db.SmallInt
+  burdenRatioExpiresAt DateTime?  @map("burden_ratio_expires_at") @db.Date
+  createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt            DateTime   @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy            String?    @map("created_by") @db.Uuid
+  updatedBy            String?    @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@index([periodEnd])
+  @@index([burdenRatioExpiresAt])
+  @@map("care_insurance")
+}
+
+/// 医療保険情報（1 利用者 1 件）。
+/// Req 7.3 の保有項目と Req 7.7 の制約を担う。
+model MedicalInsurance {
+  residentId String    @id @map("resident_id") @db.Uuid
+  insurerNo  String?   @map("insurer_no")
+  insuredNo  String?   @map("insured_no")
+  expiresAt  DateTime? @map("expires_at") @db.Date
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy  String?   @map("created_by") @db.Uuid
+  updatedBy  String?   @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("medical_insurance")
+}
+
+/// 障害福祉情報（0..1）。
+/// Req 7.4 の保有項目と Req 7.7 / 7.8 の制約を担う。
+/// 障害支援区分は区分1〜区分6＋非該当だが、運用上の表記揺れを許容するため自由テキスト。
+model DisabilityWelfareInfo {
+  residentId      String    @id @map("resident_id") @db.Uuid
+  recipientNo     String?   @map("recipient_no")
+  supportLevel    String?   @map("support_level")
+  serviceType     String?   @map("service_type")
+  periodStart     DateTime? @map("period_start") @db.Date
+  periodEnd       DateTime? @map("period_end") @db.Date
+  serviceQuantity String?   @map("service_quantity")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy       String?   @map("created_by") @db.Uuid
+  updatedBy       String?   @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@index([periodEnd])
+  @@map("disability_welfare_info")
+}
+
+/// 公費情報（1 利用者 N 件）。
+/// Req 7.5 の保有項目と Req 7.7 の制約を担う。種別は運用差異を許容する自由テキスト。
+/// `self_burden` は本人負担額（円・整数）。
+model PublicExpenseRecord {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  residentId  String    @map("resident_id") @db.Uuid
+  kind        String
+  payerNo     String?   @map("payer_no")
+  recipientNo String?   @map("recipient_no")
+  selfBurden  Decimal?  @map("self_burden") @db.Decimal(12, 0)
+  expiresAt   DateTime? @map("expires_at") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("public_expense_records")
+}
+
+// =============================================================================
+// タスク 2.4: 利用者総合保険（履歴）・外部業者キー・アラート状態
+//
+// 設計判断（design.md / Req 8, 9.4, 12）:
+// - `comprehensive_insurance_records` は 1 利用者 N 行で年度サイクルを表現する（履歴）。
+//   `billing_status` / `payment_status` は enum 既定値で初期は unbilled / unpaid。
+//   期間整合（end_date >= start_date）と年間保険料の非負を CHECK で二次防御する。
+// - `external_vendor_keys` は (resident_id, vendor_type, vendor_name) で UNIQUE
+//   とし、同一業者・業者種別への重複登録を DB レベルで拒否（Req 12.3）。
+// - `alert_status_updates` は alert_key を UNIQUE にした最新値方式（Req 9.4 / task 10.2）。
+//   既定 status は not_handled（アラート発生直後の状態）。
+// =============================================================================
+
+/// 利用者総合保険の請求状況。
+enum BillingStatus {
+  unbilled
+  billed
+}
+
+/// 利用者総合保険の入金状況。
+enum PaymentStatus {
+  unpaid
+  paid
+}
+
+/// 外部業者の種別。Req 12.2 の 6 種類の選択肢に対応。
+enum VendorType {
+  care_billing
+  medical
+  insurer
+  meal
+  home_nursing
+  other
+}
+
+/// 期限アラートの対応状況（Req 9.4）。
+enum AlertHandleStatus {
+  not_handled
+  confirmed
+  contacted
+  renewed
+}
+
+/// 利用者総合保険（年払い）。1 利用者あたり複数年度の履歴を 1:N で保持する。
+/// 次回請求予定日の自動計算・請求済み／入金済みマーク・履歴閲覧はサービス層で扱う。
+model ComprehensiveInsuranceRecord {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  residentId      String        @map("resident_id") @db.Uuid
+  enrolled        Boolean       @default(false)
+  insurerName     String?       @map("insurer_name")
+  policyNo        String?       @map("policy_no")
+  joinedAt        DateTime?     @map("joined_at") @db.Date
+  startDate       DateTime?     @map("start_date") @db.Date
+  endDate         DateTime?     @map("end_date") @db.Date
+  annualPremium   Decimal?      @map("annual_premium") @db.Decimal(12, 0)
+  nextBillingDate DateTime?     @map("next_billing_date") @db.Date
+  billingStatus   BillingStatus @default(unbilled) @map("billing_status")
+  paymentStatus   PaymentStatus @default(unpaid) @map("payment_status")
+  notes           String?
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy       String?       @map("created_by") @db.Uuid
+  updatedBy       String?       @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@index([residentId, nextBillingDate])
+  @@index([endDate])
+  @@map("comprehensive_insurance_records")
+}
+
+/// 外部業者連携キー（1 利用者 N 件）。
+/// ユニークキーは平文保存だが、PDF / ログ / 全文検索への露出は禁止
+/// （Req 12.5 / security.md）。UI 一覧は既定マスク表示（Req 12.4）。
+model ExternalVendorKey {
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  residentId String     @map("resident_id") @db.Uuid
+  vendorType VendorType @map("vendor_type")
+  vendorName String     @map("vendor_name")
+  uniqueKey  String     @map("unique_key")
+  notes      String?
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy  String?    @map("created_by") @db.Uuid
+  updatedBy  String?    @map("updated_by") @db.Uuid
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@unique([residentId, vendorType, vendorName])
+  @@map("external_vendor_keys")
+}
+
+/// 期限アラートの対応状況（最新値方式）。
+/// `alert_key` は「保険種別 + 当該レコード ID」の合成キー（design.md
+/// Expiration Alert Service）。同一 alert_key の連続更新はサービス層が upsert で扱う。
+model AlertStatusUpdate {
+  id        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertKey  String            @unique @map("alert_key")
+  status    AlertHandleStatus @default(not_handled)
+  notes     String?
+  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+  updatedBy String?           @map("updated_by") @db.Uuid
+
+  @@map("alert_status_updates")
+}
+
+// =============================================================================
+// タスク 2.5: 監査ログ
+//
+// 設計判断（design.md / Req 16）:
+// - 監査ログは集約外の追記専用テーブル。CUD 不可（サービス層の write のみ）。
+// - `actor_staff_account_id` は nullable（未認証の login_failure 等）。
+//   職員削除時は ON DELETE SET NULL で監査行を保持する（database.md の監査方針）。
+// - `metadata` は jsonb。PII を含めない型制約はサービス層（Audit Log Service）が担う
+//   （Req 16.3）。DB では構造化 JSON の受け皿のみ提供する。
+// - 検索効率のため `(created_at desc)` と
+//   `(actor_staff_account_id, created_at desc)` のインデックスを必須とする（Req 16.5）。
+// =============================================================================
+
+/// 監査イベント種別。design.md AuditEventKind と 1:1 対応（Req 16.1）。
+enum AuditEventKind {
+  login_success
+  login_failure
+  login_locked
+  logout
+  permission_denied
+  resident_created
+  resident_updated
+  resident_deleted
+  pdf_exported
+  staff_account_created
+  staff_account_updated
+  staff_account_disabled
+  password_reset_requested
+  password_reset_completed
+  facility_created
+  facility_updated
+}
+
+/// 監査ログの対象エンティティ種別。
+enum AuditTargetType {
+  resident
+  staff_account
+  facility
+  auth
+}
+
+/// 監査ログ。
+/// 認証・利用者 CUD・PDF 出力・アカウント／施設変更・パスワードリセット等の
+/// 重要操作を構造化して保管する（Req 16.1 / 16.2）。
+/// 閲覧は管理者のみ（Req 16.5）— 認可はアプリ層が担う。
+model AuditLog {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind                AuditEventKind
+  actorStaffAccountId String?         @map("actor_staff_account_id") @db.Uuid
+  targetType          AuditTargetType @map("target_type")
+  targetId            String?         @map("target_id") @db.Uuid
+  ip                  String?         @db.Inet
+  metadata            Json            @default("{}")
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+
+  actorStaffAccount StaffAccount? @relation(fields: [actorStaffAccountId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorStaffAccountId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
