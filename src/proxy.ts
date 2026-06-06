@@ -33,7 +33,7 @@ function applyPrivateNoStore(response: NextResponse): NextResponse {
   return response;
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const { claims, response } = await getCurrentClaims(request);
   const isAuthenticated = Boolean(claims?.sub);
