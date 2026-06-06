@@ -42,6 +42,7 @@ export function Field({
     id?: string;
     name?: string;
     "aria-invalid"?: boolean;
+    "aria-required"?: boolean;
     "aria-describedby"?: string;
   }>(children)
     ? cloneElement(children, {

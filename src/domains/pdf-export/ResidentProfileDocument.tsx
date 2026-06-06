@@ -139,7 +139,7 @@ function Cell({
 }) {
   const style = last ? styles.cellLast : styles.cell;
   return (
-    <View style={[style, { width }, label ? styles.label : null]}>
+    <View style={[style, { width }, ...(label ? [styles.label] : [])]}>
       {typeof children === "string" ? (
         <Text style={center ? styles.valueCenter : styles.value}>{children}</Text>
       ) : (
