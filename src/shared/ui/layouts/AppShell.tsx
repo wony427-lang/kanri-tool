@@ -19,15 +19,17 @@ export function AppShell({
   children,
 }: AppShellProps) {
   return (
-    <div className="flex min-h-full flex-col bg-background text-foreground">
+    <div className="flex h-screen flex-col bg-background text-foreground">
       <AppHeader
         session={session}
         user={user}
         adminFacilities={adminFacilities}
       />
-      <div className="flex flex-1">
+      <div className="flex min-h-0 flex-1">
         <Navigation session={session} />
-        <main className="flex-1 overflow-x-auto p-4 md:p-6">{children}</main>
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pb-4 pt-0 md:px-6 md:pb-6 md:pt-0">
+          {children}
+        </main>
       </div>
     </div>
   );

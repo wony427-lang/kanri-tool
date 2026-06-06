@@ -55,7 +55,7 @@ function SubSection({
   return (
     <section
       id={id}
-      className="flex flex-col gap-4 border-t border-muted-foreground/20 pt-6 scroll-mt-6"
+      className="flex flex-col gap-4 border-t border-muted-foreground/20 pt-6 scroll-mt-32"
     >
       <h2 className="text-lg font-semibold">{title}</h2>
       {children}

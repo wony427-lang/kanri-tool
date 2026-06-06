@@ -1,16 +1,27 @@
 import type { ReactNode } from "react";
 
+const pageHeaderBleed =
+  "-mx-4 px-4 pt-4 md:-mx-6 md:px-6 md:pt-6";
+
 function PageHeader({
   title,
   subtitle,
   actions,
+  sticky = false,
 }: {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
+  sticky?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-4 border-b border-muted-foreground/20 pb-4 md:flex-row md:items-start md:justify-between">
+    <div
+      className={
+        sticky
+          ? `sticky top-0 z-10 flex flex-col gap-4 border-b border-muted-foreground/20 bg-background pb-4 shadow-sm md:flex-row md:items-start md:justify-between ${pageHeaderBleed}`
+          : `flex flex-col gap-4 border-b border-muted-foreground/20 bg-background pb-4 md:flex-row md:items-start md:justify-between ${pageHeaderBleed}`
+      }
+    >
       <div>
         <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
         {subtitle ? (
@@ -57,7 +68,12 @@ export function DetailPage({
 }) {
   return (
     <section className="flex flex-col gap-6">
-      <PageHeader title={title} subtitle={subtitle} actions={actions} />
+      <PageHeader
+        title={title}
+        subtitle={subtitle}
+        actions={actions}
+        sticky
+      />
       <div className="rounded-lg border border-muted-foreground/20 bg-background p-6 shadow-sm">
         {children}
       </div>

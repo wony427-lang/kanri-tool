@@ -63,12 +63,6 @@ export const navigationItems: ReadonlyArray<NavigationItem> = [
     roles: ["admin"],
     permission: "audit_log:read",
   },
-  {
-    label: "UI デモ",
-    href: "/dev",
-    order: 900,
-    roles: ALL_ROLES,
-  },
 ];
 
 export function filterNavigationItems(

@@ -185,6 +185,16 @@ describe("Page layouts (task 3.6)", () => {
     expect(screen.getByRole("heading", { level: 1, name: "山田太郎" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "編集" })).toBeInTheDocument();
   });
+
+  it("keeps the detail page header sticky while scrolling", () => {
+    const { container } = render(
+      <DetailPage title="山田太郎" subtitle="第一ホーム">
+        <p>detail body</p>
+      </DetailPage>,
+    );
+
+    expect(container.querySelector(".sticky")).toBeInTheDocument();
+  });
 });
 
 describe("Boundary components (task 3.7)", () => {
