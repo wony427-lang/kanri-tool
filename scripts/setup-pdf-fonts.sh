@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REGULAR="$ROOT/public/fonts/NotoSansJP-Regular.woff"
-BOLD="$ROOT/public/fonts/NotoSansJP-Bold.woff"
+REGULAR="$ROOT/public/fonts/NotoSansJP-Regular.ttf"
+BOLD="$ROOT/public/fonts/NotoSansJP-Bold.ttf"
 
+# PDF 用フォントはリポジトリに同梱している（Noto Sans JP Regular/Bold の静的 TTF）。
+# woff は @react-pdf/renderer の読み込みが極端に遅くなるため使わない。
 if [[ -f "$REGULAR" && -f "$BOLD" ]]; then
-  echo "PDF fonts already present in public/fonts/, skipping copy"
+  echo "PDF fonts present in public/fonts/ (NotoSansJP-Regular.ttf / NotoSansJP-Bold.ttf)"
   exit 0
 fi
 
-SRC_DIR="$ROOT/node_modules/@fontsource/noto-sans-jp/files"
-if [[ ! -f "$SRC_DIR/noto-sans-jp-japanese-400-normal.woff" ]]; then
-  echo "ERROR: PDF fonts missing and @fontsource/noto-sans-jp is not installed." >&2
-  exit 1
-fi
-
-mkdir -p "$ROOT/public/fonts"
-cp "$SRC_DIR/noto-sans-jp-japanese-400-normal.woff" "$REGULAR"
-cp "$SRC_DIR/noto-sans-jp-japanese-700-normal.woff" "$BOLD"
-echo "PDF fonts copied to public/fonts/"
+echo "ERROR: PDF fonts missing." >&2
+echo "  Expected: $REGULAR" >&2
+echo "  Expected: $BOLD" >&2
+echo "  These TrueType files are committed to the repository; restore them via 'git checkout -- public/fonts'." >&2
+exit 1

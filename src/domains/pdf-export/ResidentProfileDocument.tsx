@@ -28,9 +28,9 @@ const styles = StyleSheet.create({
   page: {
     fontFamily: "NotoSansJP",
     fontSize: 8,
-    paddingTop: 20,
-    paddingHorizontal: 22,
-    paddingBottom: 16,
+    paddingTop: 24,
+    paddingHorizontal: 28,
+    paddingBottom: 20,
     lineHeight: 1.35,
     color: "#111",
   },
@@ -38,19 +38,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-end",
-    marginBottom: 6,
+    marginBottom: 10,
   },
   title: {
     fontSize: 14,
     fontWeight: "bold",
     letterSpacing: 1,
+    marginLeft: 36,
   },
   headerDate: {
     fontSize: 9,
   },
-  table: {
+  section: {
     borderWidth: 0.8,
     borderColor: BORDER,
+    marginBottom: 10,
   },
   row: {
     flexDirection: "row",
@@ -86,9 +88,44 @@ const styles = StyleSheet.create({
     fontSize: 8,
     textAlign: "center",
   },
-  bottomSection: {
+  nameCell: {
+    borderRightWidth: 0.8,
+    borderRightColor: BORDER,
+    paddingHorizontal: 4,
+    paddingVertical: 5,
+    justifyContent: "center",
+    minHeight: 42,
+  },
+  furigana: {
+    fontSize: 7,
+    color: "#444",
+    textAlign: "center",
+    marginBottom: 2,
+  },
+  nameLarge: {
+    fontSize: 15,
+    textAlign: "center",
+  },
+  birthCell: {
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+    justifyContent: "center",
+    minHeight: 42,
+  },
+  birthDate: {
+    fontSize: 9,
+  },
+  ageText: {
+    fontSize: 9,
+    textAlign: "right",
+    marginTop: 6,
+  },
+  boxSection: {
+    borderWidth: 0.8,
+    borderColor: BORDER,
+    marginBottom: 10,
     flexDirection: "row",
-    minHeight: 110,
+    minHeight: 120,
   },
   verticalLabel: {
     width: 16,
@@ -103,24 +140,21 @@ const styles = StyleSheet.create({
     fontSize: 8,
     lineHeight: 1.1,
   },
-  bottomContent: {
+  boxContent: {
     flex: 1,
     borderRightWidth: 0.8,
     borderRightColor: BORDER,
     padding: 4,
   },
-  bottomContentLast: {
+  boxContentLast: {
     flex: 1,
     padding: 4,
   },
   footer: {
-    marginTop: 6,
+    marginTop: 4,
     fontSize: 6.5,
     color: "#555",
     textAlign: "right",
-  },
-  checkbox: {
-    fontSize: 8,
   },
 });
 
@@ -138,10 +172,21 @@ function Cell({
   center?: boolean;
 }) {
   const style = last ? styles.cellLast : styles.cell;
+  const isTextContent =
+    children === null ||
+    children === undefined ||
+    typeof children === "string" ||
+    typeof children === "number" ||
+    (Array.isArray(children) &&
+      children.every(
+        (child) => typeof child === "string" || typeof child === "number",
+      ));
   return (
     <View style={[style, { width }, ...(label ? [styles.label] : [])]}>
-      {typeof children === "string" ? (
-        <Text style={center ? styles.valueCenter : styles.value}>{children}</Text>
+      {isTextContent ? (
+        <Text style={center ? styles.valueCenter : styles.value}>
+          {children}
+        </Text>
       ) : (
         children
       )}
@@ -159,6 +204,10 @@ function Row({
   return <View style={last ? styles.rowLast : styles.row}>{children}</View>;
 }
 
+function Section({ children }: { children: ReactNode }) {
+  return <View style={styles.section}>{children}</View>;
+}
+
 function VerticalLabel({ text }: { text: string }) {
   return (
     <View style={styles.verticalLabel}>
@@ -168,22 +217,6 @@ function VerticalLabel({ text }: { text: string }) {
         </Text>
       ))}
     </View>
-  );
-}
-
-function CheckboxPair({
-  checked,
-  yesLabel = "有",
-  noLabel = "無",
-}: {
-  checked: boolean;
-  yesLabel?: string;
-  noLabel?: string;
-}) {
-  return (
-    <Text style={styles.checkbox}>
-      {yesLabel} {checked ? "■" : "□"}  {noLabel} {!checked ? "■" : "□"}
-    </Text>
   );
 }
 
@@ -231,23 +264,26 @@ export function ResidentProfileDocument({
           </Text>
         </View>
 
-        <View style={styles.table}>
+        <Section>
           <Row>
             <Cell width="12%" label>
               利用者名
             </Cell>
-            <Cell width="28%">
-              {displayValue(resident.nameKana)}
-            </Cell>
-            <Cell width="12%" label>
+            <View style={[styles.nameCell, { width: "38%" }]}>
+              <Text style={styles.furigana}>
+                {displayValue(resident.nameKana)}
+              </Text>
+              <Text style={styles.nameLarge}>{displayValue(resident.name)}</Text>
+            </View>
+            <Cell width="14%" label>
               生年月日
             </Cell>
-            <Cell width="28%">
-              {formatWarekiDate(resident.birthDate)}
-            </Cell>
-            <Cell width="20%" last center>
-              {displayValue(resident.name)}　{resident.age} 歳
-            </Cell>
+            <View style={[styles.birthCell, { width: "36%" }]}>
+              <Text style={styles.birthDate}>
+                {formatWarekiDate(resident.birthDate)}
+              </Text>
+              <Text style={styles.ageText}>{resident.age} 歳</Text>
+            </View>
           </Row>
 
           <Row>
@@ -259,7 +295,7 @@ export function ResidentProfileDocument({
             </Cell>
           </Row>
 
-          <Row>
+          <Row last>
             <Cell width="8%" label>
               TEL
             </Cell>
@@ -275,7 +311,9 @@ export function ResidentProfileDocument({
               {displayValue(resident.mobile)}
             </Cell>
           </Row>
+        </Section>
 
+        <Section>
           <Row>
             <Cell width="14%" label>
               保険者番号
@@ -310,12 +348,12 @@ export function ResidentProfileDocument({
             </Cell>
           </Row>
 
-          <Row>
+          <Row last>
             <Cell width="16%" label>
               負担割合証
             </Cell>
-            <Cell width="16%">
-              <CheckboxPair checked={hasBurdenRatio} />
+            <Cell width="16%" center>
+              {hasBurdenRatio ? "（有）　無" : "有　（無）"}
             </Cell>
             <Cell width="16%" label>
               認定の有効期間
@@ -324,70 +362,74 @@ export function ResidentProfileDocument({
               {burdenRatioPeriod(care)}
             </Cell>
           </Row>
+        </Section>
 
+        <Section>
           <Row>
-            <Cell width="18%" label>
-              居宅介護{"\n"}支援事業所
+            <Cell width="14%" label>
+              居宅介護
             </Cell>
-            <Cell width="22%">{displayValue(medicalCare?.careOffice)}</Cell>
-            <Cell width="10%" label>
+            <Cell width="36%">{displayValue(medicalCare?.careOffice)}</Cell>
+            <Cell width="14%" label>
               介護支援
             </Cell>
-            <Cell width="8%" label>
+            <Cell width="10%" label>
               TEL
             </Cell>
-            <Cell width="42%" last>
+            <Cell width="26%" last>
               {displayValue(medicalCare?.careOfficePhone)}
             </Cell>
           </Row>
 
-          <Row>
-            <Cell width="22%" label>
-              支援事業所 指定番号
+          <Row last>
+            <Cell width="14%" label>
+              支援事業所
             </Cell>
-            <Cell width="28%">
-              {displayValue(medicalCare?.careOfficeLicenseNo) || " "}
+            <Cell width="36%">
+              指定番号：{displayValue(medicalCare?.careOfficeLicenseNo)}
             </Cell>
-            <Cell width="10%" label>
+            <Cell width="14%" label>
               専門員
             </Cell>
-            <Cell width="8%" label>
+            <Cell width="10%" label>
               氏名
             </Cell>
-            <Cell width="32%" last>
+            <Cell width="26%" last>
               {displayValue(medicalCare?.careManagerName)}
             </Cell>
           </Row>
+        </Section>
 
+        <Section>
           <Row>
-            <Cell width="12%" label>
+            <Cell width="14%" label>
               医療機関
             </Cell>
-            <Cell width="38%">
+            <Cell width="36%">
               {displayValue(medicalCare?.medicalFacilityName)}
             </Cell>
-            <Cell width="12%" label>
+            <Cell width="14%" label>
               主治医
             </Cell>
-            <Cell width="38%" last>
+            <Cell width="36%" last>
               {displayValue(medicalCare?.primaryDoctor)}
             </Cell>
           </Row>
 
           <Row>
-            <Cell width="22%" label>
+            <Cell width="24%" label>
               緊急時希望搬送病院
             </Cell>
-            <Cell width="8%" label>
+            <Cell width="6%" label>
               ①
             </Cell>
-            <Cell width="32%">
+            <Cell width="30%">
               {displayValue(medicalCare?.emergencyHospital)}
             </Cell>
-            <Cell width="8%" label>
+            <Cell width="6%" label>
               ②
             </Cell>
-            <Cell width="30%" last>
+            <Cell width="34%" last>
               {displayValue(medicalCare?.emergencyHospital2)}
             </Cell>
           </Row>
@@ -396,16 +438,16 @@ export function ResidentProfileDocument({
             <Cell width="14%" label>
               保険者番号
             </Cell>
-            <Cell width="18%">{displayValue(medical?.insurerNo)}</Cell>
+            <Cell width="36%">{displayValue(medical?.insurerNo)}</Cell>
             <Cell width="14%" label>
               被保険者番号
             </Cell>
-            <Cell width="54%" last>
+            <Cell width="36%" last>
               {displayValue(medical?.insuredNo)}
             </Cell>
           </Row>
 
-          <Row>
+          <Row last>
             <Cell width="14%" label>
               有効期間
             </Cell>
@@ -413,17 +455,19 @@ export function ResidentProfileDocument({
               {formatWarekiPeriod(null, medical?.expiresAt)}
             </Cell>
           </Row>
+        </Section>
 
+        <Section>
           <Row>
-            <Cell width="18%" label>
+            <Cell width="16%" label>
               受給者証番号
             </Cell>
-            <Cell width="22%">{displayValue(disability?.recipientNo)}</Cell>
+            <Cell width="24%">{displayValue(disability?.recipientNo)}</Cell>
             <Cell width="16%" label>
               障害支援区分
             </Cell>
-            <Cell width="18%">{displayValue(disability?.supportLevel)}</Cell>
-            <Cell width="12%" label>
+            <Cell width="16%">{displayValue(disability?.supportLevel)}</Cell>
+            <Cell width="14%" label>
               サービス種別
             </Cell>
             <Cell width="14%" last>
@@ -431,41 +475,43 @@ export function ResidentProfileDocument({
             </Cell>
           </Row>
 
-          <Row>
-            <Cell width="14%" label>
+          <Row last>
+            <Cell width="16%" label>
               支給決定期間
             </Cell>
-            <Cell width="46%">
+            <Cell width="44%">
               {formatWarekiPeriod(disability?.periodStart, disability?.periodEnd)}
             </Cell>
-            <Cell width="12%" label>
+            <Cell width="14%" label>
               支給量等
             </Cell>
-            <Cell width="28%" last>
+            <Cell width="26%" last>
               {displayValue(disability?.serviceQuantity)}
             </Cell>
           </Row>
+        </Section>
 
+        <Section>
           <Row>
-            <Cell width="14%" label>
+            <Cell width="14%" label center>
               公費種別
             </Cell>
-            <Cell width="16%" label>
+            <Cell width="16%" label center>
               有効期限
             </Cell>
-            <Cell width="18%" label>
+            <Cell width="18%" label center>
               負担者番号
             </Cell>
-            <Cell width="18%" label>
+            <Cell width="18%" label center>
               受給者番号
             </Cell>
-            <Cell width="34%" last label>
+            <Cell width="34%" last label center>
               本人負担額
             </Cell>
           </Row>
 
           {publicExpenseRows.map((expense, index) => (
-            <Row key={expense?.id ?? `empty-${index}`}>
+            <Row key={expense?.id ?? `empty-${index}`} last={index === publicExpenseRows.length - 1}>
               <Cell width="14%">
                 {expense
                   ? `${index + 1} ${displayValue(expense.kind)}`
@@ -483,7 +529,9 @@ export function ResidentProfileDocument({
               </Cell>
             </Row>
           ))}
+        </Section>
 
+        <Section>
           <Row>
             <Cell width="14%" label>
               ①緊急連絡先
@@ -551,20 +599,31 @@ export function ResidentProfileDocument({
               {displayValue(contact2?.mobile)}
             </Cell>
           </Row>
+        </Section>
 
-          <View style={styles.bottomSection}>
-            <VerticalLabel text="病歴" />
-            <View style={styles.bottomContent}>
-              <Text style={styles.value}>
-                {displayValue(resident.medicalHistory) || " "}
-              </Text>
-            </View>
-            <VerticalLabel text="備考" />
-            <View style={styles.bottomContentLast}>
-              <Text style={styles.value}>
-                {displayValue(resident.notes) || " "}
-              </Text>
-            </View>
+        <View style={styles.boxSection}>
+          <VerticalLabel text="病歴" />
+          <View style={styles.boxContent}>
+            <Text style={styles.value}>
+              {displayValue(resident.medicalHistory) || " "}
+            </Text>
+          </View>
+          <VerticalLabel text="備考" />
+          <View style={styles.boxContentLast}>
+            <Text style={styles.value}>
+              {displayValue(resident.notes) || " "}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.boxSection}>
+          <VerticalLabel text="家族構成図" />
+          <View style={styles.boxContent}>
+            <Text style={styles.value}>□ : 男性　　○ : 女性</Text>
+          </View>
+          <VerticalLabel text="室内見取図" />
+          <View style={styles.boxContentLast}>
+            <Text style={styles.value}>戸建　　集合住宅</Text>
           </View>
         </View>
 

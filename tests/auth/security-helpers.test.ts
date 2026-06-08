@@ -69,7 +69,7 @@ describe("route guards (task 4.1, 16.2)", () => {
     expect(isProtectedPath("/api/residents/x/pdf")).toBe(true);
     expect(isProtectedPath("/")).toBe(true);
     expect(isProtectedPath("/login")).toBe(false);
-    expect(isProtectedPath("/fonts/NotoSansJP-Regular.woff")).toBe(false);
+    expect(isProtectedPath("/fonts/NotoSansJP-Regular.ttf")).toBe(false);
   });
 
   it("redirects unauthenticated users from protected routes", () => {
